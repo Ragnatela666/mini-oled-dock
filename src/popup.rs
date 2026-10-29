@@ -43,7 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadCursorW, PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowsHookExW, ShowWindow,
     UnhookWindowsHookEx, UnregisterClassW, HHOOK, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
     WM_XBUTTONDOWN, HTCLIENT,
-    IDC_ARROW, IDC_HAND, SW_HIDE, SW_SHOW, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
+    IDC_ARROW, IDC_HAND, SW_HIDE, SW_SHOWNA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -886,8 +886,10 @@ fn open(kind: PopupKind, anchor: Anchor) {
     }
     log!("popup: opening {kind:?}");
     // No borrow during ShowWindow / force_foreground: they can deliver messages to the popup.
+    // SHOWNA: activated only by `force_foreground`. Active before its AttachThreadInput, the popup would get
+    // WA_INACTIVE from the merged input queues and close at once (first click lost when another app was in front).
     // SAFETY: `hwnd` is our popup window.
-    let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
     store_rect(&ITEM_RECT, &anchor.item);
     install_mouse_hook();
     crate::ui::force_foreground(hwnd);
