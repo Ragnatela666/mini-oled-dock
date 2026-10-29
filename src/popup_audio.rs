@@ -40,7 +40,8 @@ const ID_MUTE: u32 = 1;
 const ID_SLIDER: u32 = 2;
 const ID_MIXER: u32 = 3;
 /// Pencil button: Customize mode on / off.
-const ID_EDIT: u32 = 4;
+/// PREVIEW-HOOK: `preview` clicks it to render the Customize mode.
+pub(crate) const ID_EDIT: u32 = 4;
 /// Header of section `ID_HEAD + section` (0..=3): expand / collapse; in Customize mode also the
 /// handle that drags the section to a new place.
 const ID_HEAD: u32 = 10;

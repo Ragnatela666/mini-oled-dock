@@ -538,11 +538,15 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
             notif::preview_set_state(mock_notifications(), icons);
             crate::popup_notif::new()
         }
-        "popup_audio" => {
+        "popup_audio" | "popup_audio_customize" => {
             let mut c = crate::popup_audio::new(VolumeState { level: 60, muted: false, available: true });
             c.data(&DataEvent::AudioOutputs(mock_outputs()));
             c.data(&DataEvent::Spatial(Some(mock_spatial())));
             c.data(&DataEvent::AudioSessions(mock_sessions()));
+            if name == "popup_audio_customize" {
+                // The pencil only flips the Customize mode: nothing is saved.
+                c.click(crate::popup_audio::ID_EDIT);
+            }
             c
         }
         "popup_calendar" => crate::popup_calendar::new(),
@@ -557,6 +561,11 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
         "popup_power" => crate::popup_power::new(),
         // No displays passed: no "Screen" row, whatever monitors this machine has.
         "popup_settings" => crate::popup_settings::preview_with_screens(Vec::new()),
+        // Italian texts: the caller lifts the preview's forced English around this one.
+        "popup_settings_it" => {
+            crate::config::set(Config { language: crate::config::Language::It, ..Config::default() });
+            crate::popup_settings::preview_with_screens(Vec::new())
+        }
         "popup_settings_navy" => {
             crate::config::set(Config {
                 background: Background(0x0E1A33),
@@ -805,6 +814,8 @@ pub fn run(dir: &str) -> i32 {
         for (name, nth) in [
             ("popup_notif", 1),
             ("popup_audio", 3),
+            ("popup_audio_customize", 2),
+            ("popup_settings_it", 3),
             ("popup_calendar", 8),
             ("popup_network", 0),
             ("popup_network_offline", 9),
@@ -830,10 +841,17 @@ pub fn run(dir: &str) -> i32 {
         ] {
             // Popups read the background tone from the config: every one starts from the defaults.
             crate::config::set(Config::default());
+            let italian = name.ends_with("_it");
+            if italian {
+                crate::i18n::set_preview(false);
+            }
             let ok = match make_popup(name, m) {
                 Some(c) => popup_png(dir, &format!("{name}{suffix}.png"), m, c, nth),
                 None => false,
             };
+            if italian {
+                crate::i18n::set_preview(true);
+            }
             failures += i32::from(!ok);
         }
     }

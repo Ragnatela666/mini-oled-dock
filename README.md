@@ -32,6 +32,20 @@ New in this fork:
 |---|---|---|
 | ![](docs/screenshots/popup_startmenu.png) | ![](docs/screenshots/popup_startmenu_search.png) | ![](docs/screenshots/popup_settings_pointer.png) |
 
+New from [Desox's PR #1](https://github.com/Ragnatela666/mini-oled-dock/pull/1) (all optional, off by default):
+
+| Horizontal Start | Horizontal Start: all apps | Horizontal Start: power flyout |
+|---|---|---|
+| ![](docs/screenshots/popup_startmenu_h.png) | ![](docs/screenshots/popup_startmenu_h_all.png) | ![](docs/screenshots/popup_startmenu_h_power.png) |
+
+| Volume: spatial sound and mixer | Volume: customize mode | Settings in Italian |
+|---|---|---|
+| ![](docs/screenshots/popup_audio.png) | ![](docs/screenshots/popup_audio_customize.png) | ![](docs/screenshots/popup_settings_it.png) |
+
+| Settings: Start menu (import from Windows) |
+|---|
+| ![](docs/screenshots/popup_settings_startmenu.png) |
+
 ## Features
 
 - Centred bar sized to its content: pinned apps first, then open apps. An underline marks open windows (orange when an app asks for attention).
@@ -52,6 +66,12 @@ New in this fork:
 - **Follow the pointer** (fork): with Settings -> Screen -> "Pointer", the Win key brings the bar to the display under the mouse pointer.
 - **Start menu on any display** (fork): a quick double tap of the Win key (or a left click on the Start button) opens the dock's own Start menu next to the Start button, on the display under the pointer (the native one only opens on the primary taskbar's display). It lists every app of the native Start menu, classic programs and Store apps alike; type to search (Enter launches the first result, arrows move the selection, Esc clears), and right-click an app to pin it at the top (`start_pins` in the config, separate from the bar pins). Double tap again or Esc to close.
 - **Working notifications** (fork): a click on a notification brings the app that sent it to the front (or launches it; if the app cannot be found, the Windows notification centre opens) and removes the notification; **Clear all** and the **X** of a single notification also remove them from Windows' notification history, so they no longer come back.
+- **Win key opens Start** (Desox, off by default): one tap of Win opens the dock and the Start menu together in a single animation, the next tap closes both; with auto-hide off the dock stays and Win only toggles Start.
+- **Language** (Desox): Settings → Appearance → Language: System (default, follows Windows), English or Italian, applied at once, clock and calendar included.
+- **Horizontal Start** (Desox, off by default): Settings → Start menu → Horizontal gives a Windows 11-style layout with search on top, a 6×3 pinned grid with pages, an alphabetical "All apps" list, and a power flyout (Sleep, Lock, Restart, Shut down, Settings, Close dock) inside the menu. Both styles share the same `start_pins`. **Import from Windows Start** copies your Windows pins in the same order (it runs `Export-StartLayout` once, hidden, with a 30 s limit).
+- **Spatial sound and volume mixer** (Desox): the volume popup lists the spatial formats really available on the current output (Windows Sonic, Dolby Atmos for Headphones, ...) and one row per app playing audio (up to 8, with mute and slider), plus System sounds.
+- **Customizable volume popup** (Desox): each section (Master volume, Output, Spatial sound, Mixer) can be collapsed; the pencil enters Customize mode, where an eye hides or shows a section and dragging its header reorders it. A collapsed or hidden section loads nothing.
+- **Fixes** (Desox): tray right-click menus open centred above their icon (G HUB's panel no longer jumps to the top-left corner), apps launched from the dock open in the foreground, and the Win key keeps Start open over fullscreen games that grab the foreground back.
 - Auto-hide with a slide animation: the bar shows on the Win key or when the pointer touches the screen edge, and hides after 2.5 s.
 - Autostart without UAC prompts (scheduled task).
 - Watchdog process that always restores the native taskbar.
@@ -91,7 +111,7 @@ The logon task runs the dock elevated, so the installed copy lives in an admin-o
 - **Start menu:** double tap the Win key (second tap within 300 ms; the first tap is not delayed) or left click the Start button. Type to search, Enter launches the first result, arrows and the wheel scroll, right click pins / unpins an app, Esc clears the search and then closes. Right click on the Start button still opens the quick-links menu.
 - **Notifications:** click one to switch to its app, X removes it, **Clear all** empties the list and the Windows history.
 - **App entries:** left click activates, minimises or cycles windows; middle click starts a new instance; right click opens the app menu; resting the pointer on an app with several windows shows a preview of each (click one to switch to it).
-- **Volume:** wheel changes it, middle click mutes, left click opens the audio popup.
+- **Volume:** wheel changes it, middle click mutes, left click opens the audio popup (output, spatial sound, per-app mixer). Click a section header to collapse it; the pencil at the bottom enters Customize mode (eye = hide / show, drag a header to reorder).
 - **Network:** left click opens the network popup (connection, internet, IPv4, signal, "Network settings"); right click opens Windows' network settings.
 - **System metrics:** click opens Task Manager.
 - **Settings:** power button, then **Settings**: position, screen (with two or more displays: **Main**, the display number or **Pointer**), display mode, auto-hide, window previews, clock seconds, one switch per module, **Choose tray icons** (which tray icons stay in the bar) and two sub-pages:
@@ -132,6 +152,10 @@ The logon task runs the dock elevated, so the installed copy lives in an admin-o
 | `pinned` | `[]` | Pinned apps, in display order |
 | `start_pins` | `[]` | Apps pinned at the top of the dock's Start menu (separate from `pinned`; right click an app in the menu to add or remove it) |
 | `names` | `{}` | Display-name overrides (key: lowercase exe name or AUMID) |
+| `language` | `"auto"` | Dock language: `"auto"` (Windows display language), `"en"` or `"it"` |
+| `win_opens_start` | `false` | One tap of Win opens the dock and the Start menu together |
+| `start_style` | `"vertical"` | Start menu layout: `"vertical"` or `"horizontal"` |
+| `audio_layout` | `"MOSX"` | Volume popup sections in order (M master, O output, S spatial, X mixer; lowercase = collapsed, `-` in front = hidden); normally set from the popup |
 
 The bar height follows the tallest content; the defaults give the original 36 px bar. An old `bar_size` value (`"small"`, `"medium"`, `"large"`) is converted once into the four sizes.
 
