@@ -47,6 +47,7 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::RECT;
 
 use crate::config::StartStyle;
+use crate::i18n::tr;
 use crate::icons::IconBitmap;
 use crate::log;
 use crate::popup::{center_y, hline, lift, row_plate, Button, Content, DataEvent, HitMap, PopupKind, Reply};
@@ -453,36 +454,25 @@ struct Labels {
     no_pins: &'static str,
 }
 
-const EN: Labels = Labels {
-    placeholder: "Type to search apps",
-    pinned: "Pinned",
-    all: "All apps",
-    results: "Results",
-    hint: "Right-click to pin",
-    loading: "Loading apps\u{2026}",
-    none: "No apps found",
-    all_button: "All apps \u{203A}",
-    back: "\u{2039} Back",
-    no_pins: "Right-click an app in All apps to pin it",
-};
-
-const IT: Labels = Labels {
-    placeholder: "Scrivi per cercare un'app",
-    pinned: "Aggiunte",
-    all: "Tutte le app",
-    results: "Risultati",
-    hint: "Clic destro per fissare",
-    loading: "Caricamento app\u{2026}",
-    none: "Nessuna app trovata",
-    all_button: "Tutte le app \u{203A}",
-    back: "\u{2039} Indietro",
-    no_pins: "Clic destro su un'app in Tutte le app per fissarla",
-};
+/// The labels in the dock language (`i18n::tr`, like every other popup; English in preview mode).
+fn labels() -> Labels {
+    Labels {
+        placeholder: tr("Type to search apps", "Scrivi per cercare un'app"),
+        pinned: tr("Pinned", "Aggiunte"),
+        all: tr("All apps", "Tutte le app"),
+        results: tr("Results", "Risultati"),
+        hint: tr("Right-click to pin", "Clic destro per fissare"),
+        loading: tr("Loading apps\u{2026}", "Caricamento app\u{2026}"),
+        none: tr("No apps found", "Nessuna app trovata"),
+        all_button: tr("All apps \u{203A}", "Tutte le app \u{203A}"),
+        back: tr("\u{2039} Back", "\u{2039} Indietro"),
+        no_pins: tr("Right-click an app in All apps to pin it", "Clic destro su un'app in Tutte le app per fissarla"),
+    }
+}
 
 // ------------------------------------------------------------------ content
 
 pub(crate) struct StartMenu {
-    labels: &'static Labels,
     m: Metrics,
     geo: Geo,
     query: String,
@@ -517,7 +507,7 @@ pub(crate) struct StartMenu {
 
 /// Creates the content in the configured style; labels in the dock language (`i18n`).
 pub(crate) fn new() -> Box<dyn Content> {
-    let mut c = make(if crate::i18n::italian() { &IT } else { &EN });
+    let mut c = make();
     if crate::config::get().start_style == StartStyle::Horizontal {
         c.horiz = true;
         // The account name of the process (as GetUserNameW): no picture, nothing else loaded.
@@ -526,9 +516,8 @@ pub(crate) fn new() -> Box<dyn Content> {
     Box::new(c)
 }
 
-fn make(labels: &'static Labels) -> StartMenu {
+fn make() -> StartMenu {
     StartMenu {
-        labels,
         m: Metrics { dpi: 96 },
         geo: Geo::default(),
         query: String::new(),
@@ -551,9 +540,9 @@ fn make(labels: &'static Labels) -> StartMenu {
 }
 
 /// PREVIEW-HOOK: the menu over a mock catalog (`apps`: id, name, icon; the icons all of one size),
-/// English labels, `query` already typed, in `style` (horizontal: `all` = on the "All apps" page,
-/// a fixed user name, `power` = the power flyout open). Replaces the store; asks the shell thread
-/// for nothing.
+/// English labels (`--preview` puts `i18n` in preview mode), `query` already typed, in `style`
+/// (horizontal: `all` = on the "All apps" page, a fixed user name, `power` = the power flyout
+/// open). Replaces the store; asks the shell thread for nothing.
 pub(crate) fn preview_new(
     apps: Vec<(String, String, IconBitmap)>,
     query: &str,
@@ -569,7 +558,7 @@ pub(crate) fn preview_new(
     });
     store_apps(apps.iter().map(|(id, name, _)| StartApp { id: id.clone(), name: name.clone() }).collect());
     store_icons(px, apps.into_iter().map(|(id, _, b)| (id, Some(b))).collect());
-    let mut c = make(&EN);
+    let mut c = make();
     c.requested = true;
     if style == StartStyle::Horizontal {
         c.horiz = true;
@@ -803,7 +792,7 @@ impl StartMenu {
         let ty = center_y(&g.search, lh);
         let max_w = g.search.right - m.px(12) - tx;
         let caret_x = if self.query.is_empty() {
-            s.text(self.labels.placeholder, tx, ty, Font::Normal, WHITE, TEXT3_ALPHA);
+            s.text(labels().placeholder, tx, ty, Font::Normal, WHITE, TEXT3_ALPHA);
             tx
         } else {
             let shown = tail_fit(s, &self.query, max_w);
@@ -854,15 +843,15 @@ impl StartMenu {
         let g = &self.geo;
         // Pinned grid.
         if let Some(hh) = g.pins_header {
-            Self::paint_header(s, hh, self.labels.pinned, None);
+            Self::paint_header(s, hh, labels().pinned, None);
         }
         for (i, (rc, &idx)) in g.tiles.iter().zip(&self.pins).enumerate() {
             let Some(app) = st.apps.get(idx) else { continue };
             Self::paint_tile(s, st, rc, app, ID_PIN + i as u32, m.px(10), hot, pressed);
         }
         // App list.
-        let title = if self.searching() { self.labels.results } else { self.labels.all };
-        Self::paint_header(s, g.list_header, title, Some(self.labels.hint));
+        let title = if self.searching() { labels().results } else { labels().all };
+        Self::paint_header(s, g.list_header, title, Some(labels().hint));
         self.paint_list(s, st, hot, pressed);
     }
 
@@ -873,19 +862,19 @@ impl StartMenu {
         let list = self.list_mode();
         // Header: title on the left, the button on the right, the pin hint before it on the list.
         let title = if self.searching() {
-            self.labels.results
+            labels().results
         } else if self.all {
-            self.labels.all
+            labels().all
         } else {
-            self.labels.pinned
+            labels().pinned
         };
         let head = RECT { right: g.button.map_or(g.list_header.right, |b| b.left - m.px(8)), ..g.list_header };
-        Self::paint_header(s, head, title, list.then_some(self.labels.hint));
+        Self::paint_header(s, head, title, list.then_some(labels().hint));
         if let Some(b) = g.button {
             let r = m.px(ROW_RADIUS);
             s.fill_rr(b, r, WHITE, H_BTN_ALPHA);
             let lit = row_plate(s, b, ID_ALL, hot, pressed);
-            let text = if self.all { self.labels.back } else { self.labels.all_button };
+            let text = if self.all { labels().back } else { labels().all_button };
             let tx = b.left + (b.right - b.left - s.text_width(text, Font::Small)) / 2;
             s.text(text, tx, center_y(&b, s.line_height(Font::Small)), Font::Small, WHITE, lift(TEXT_ALPHA, lit));
         }
@@ -894,7 +883,7 @@ impl StartMenu {
         } else if self.pins.is_empty() {
             // Nothing pinned (or the catalog still loading while pins are configured).
             let waiting = !st.loaded && !crate::config::get().start_pins.is_empty();
-            let msg = if waiting { self.labels.loading } else { self.labels.no_pins };
+            let msg = if waiting { labels().loading } else { labels().no_pins };
             let msg = s.ellipsize(msg, Font::Normal, g.grid.right - g.grid.left);
             let w = s.text_width(&msg, Font::Normal);
             let x = g.grid.left + (g.grid.right - g.grid.left - w) / 2;
@@ -990,7 +979,7 @@ impl StartMenu {
         let g = &self.geo;
         let lh = s.line_height(Font::Normal);
         if !st.loaded || self.results.is_empty() {
-            let msg = if st.loaded { self.labels.none } else { self.labels.loading };
+            let msg = if st.loaded { labels().none } else { labels().loading };
             let w = s.text_width(msg, Font::Normal);
             let x = g.list.left + (g.list.right - g.list.left - w) / 2;
             s.text(msg, x, g.list.top + m.px(24), Font::Normal, WHITE, TEXT3_ALPHA);
@@ -1037,7 +1026,7 @@ impl Content for StartMenu {
         self.m = s.metrics();
         if self.horiz {
             let bw = |t: &str| s.text_width(t, Font::Small) + 2 * self.m.px(H_BTN_PAD);
-            self.button_w = (bw(self.labels.all_button), bw(self.labels.back));
+            self.button_w = (bw(labels().all_button), bw(labels().back));
         }
         if !self.requested {
             self.requested = true;
@@ -1285,7 +1274,7 @@ mod tests {
 
     #[test]
     fn horizontal_menu_pages_by_wheel_and_toggles_all_apps() {
-        let mut c = make(&EN);
+        let mut c = make();
         c.horiz = true;
         c.requested = true;
         c.button_w = (90, 70);
@@ -1299,7 +1288,7 @@ mod tests {
         c.all = true;
         assert!(c.list_mode());
         // The vertical style never offsets the pins.
-        let mut v = make(&EN);
+        let mut v = make();
         v.pins = vec![4, 5];
         v.page = 3;
         assert_eq!(v.app_at(ID_PIN + 1), Some(5));
@@ -1339,7 +1328,7 @@ mod tests {
 
     #[test]
     fn power_flyout_toggles_and_esc_closes_only_it() {
-        let mut c = make(&EN);
+        let mut c = make();
         c.horiz = true;
         c.requested = true;
         c.button_w = (90, 70);
@@ -1371,7 +1360,7 @@ mod tests {
         assert_eq!(c.power_pending, Some(PowerAction::Lock));
         c.power_pending = None;
         // The vertical style has no power button: no flyout.
-        let mut v = make(&EN);
+        let mut v = make();
         v.refresh();
         assert_eq!(v.click(ID_POWER), Reply::None);
         assert!(!v.flyout);
