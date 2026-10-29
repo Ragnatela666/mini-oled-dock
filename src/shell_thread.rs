@@ -1554,6 +1554,23 @@ impl Drop for OwnedVariant {
     }
 }
 
+/// true if Explorer's desktop is registered with `ShellWindows`, i.e. `desktop_shell_execute` can
+/// reach it. A freshly (re)started Explorer registers it some seconds after its taskbar appears.
+/// Needs COM initialized on the calling thread.
+pub(crate) fn desktop_registered() -> bool {
+    // SAFETY: COM initialized by the caller; the interface is released when it goes out of scope and
+    // the VARIANTs outlive the call.
+    unsafe {
+        let Ok(windows) = CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_LOCAL_SERVER) else {
+            return false;
+        };
+        let loc = OwnedVariant::i4(CSIDL_DESKTOP as i32);
+        let root = OwnedVariant::empty();
+        let mut hwnd = 0i32;
+        windows.FindWindowSW(&loc.0, &root.0, SWC_DESKTOP, &mut hwnd, SWFO_NEEDDISPATCH).is_ok()
+    }
+}
+
 /// Runs `file` through the desktop shell (Explorer, at the user's medium integrity), so the new
 /// process is NOT elevated even when the dock is:
 /// `IShellWindows::FindWindowSW(CSIDL_DESKTOP)` -> `IServiceProvider::QueryService(SID_STopLevelBrowser)`
