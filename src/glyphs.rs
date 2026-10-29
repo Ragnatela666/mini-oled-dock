@@ -2,7 +2,7 @@
 //!
 //! Each shape is a PURE function `(u, v) -> bool` in the 16x16 logical space (u = x, v = y, origin
 //! at the top left): true if the point is inside the shape. The caller evaluates it with 4x4
-//! supersampling (`render::Canvas::vector`, `surface::Surface::glyph`), so there is no antialiasing here; the only state is the scale (`set_scale`), which makes strokes whole physical pixels.
+//! supersampling (`surface::Canvas::glyph`, used by the bar and by `surface::Surface::glyph`), so there is no antialiasing here; the only state is the scale (`set_scale`), which makes strokes whole physical pixels.
 //! No resources, no icon font, no GDI dependency.
 
 use std::cell::Cell;
@@ -19,7 +19,7 @@ thread_local! {
 }
 
 /// Sets the scale for the following shapes: `size` = side in physical pixels of the 16x16 square.
-/// Called by `render::Canvas::vector` and `surface::Surface::glyph` (same thread that evaluates the shapes).
+/// Called by `surface::Canvas::glyph` (same thread that evaluates the shapes).
 pub fn set_scale(size: i32) {
     if size > 0 {
         SCALE.with(|c| c.set(size as f32 / 16.0));
