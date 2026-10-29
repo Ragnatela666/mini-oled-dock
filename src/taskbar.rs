@@ -596,12 +596,18 @@ pub fn hide_all() {
 }
 
 /// Callback for `WM_DOCK_TASKBAR_EVENT` (wParam = event, lParam = HWND): if `hwnd` (or its parent)
-/// is of a native taskbar class and visible, redoes `hide_all()`.
+/// is of a native taskbar class and visible, redoes `hide_all()`. The creation of Explorer's primary
+/// `Shell_TrayWnd` is an Explorer restart (`explorer_restarted`).
 pub fn on_winevent(event: u32, hwnd: HWND) {
     if !HIDDEN.load(Relaxed) || hwnd.0.is_null() || restored_externally() {
         return;
     }
-    let target = if is_taskbar_class(&class_of(hwnd)) {
+    let class = class_of(hwnd);
+    if event == EVENT_OBJECT_CREATE && class == "Shell_TrayWnd" && !is_dock_tray_host(hwnd) {
+        explorer_restarted("new Shell_TrayWnd");
+        return;
+    }
+    let target = if is_taskbar_class(&class) {
         hwnd
     } else {
         // SAFETY: GetParent has no preconditions; for invalid windows it fails.
@@ -641,7 +647,14 @@ pub fn on_taskbar_created() {
     if last != 0 && now_ms().saturating_sub(last) < OWN_BROADCAST_WINDOW_MS {
         return;
     }
-    log!("taskbar: TaskbarCreated (Explorer restarted?), redoing self-heal and hide");
+    explorer_restarted("TaskbarCreated");
+}
+
+/// Explorer restarted: self-heal, hide, and announce our tray again. Reached from `TaskbarCreated` and
+/// from the creation of a new `Shell_TrayWnd` (`on_winevent`): while our tray host exists Explorer
+/// does not broadcast `TaskbarCreated` on restart, so the window event is what actually fires.
+fn explorer_restarted(why: &str) {
+    log!("taskbar: Explorer restarted ({why}), redoing self-heal and hide");
     self_heal();
     if !ensure_state_saved(None) {
         log!("taskbar: state not saveable after the Explorer restart, not hiding");
