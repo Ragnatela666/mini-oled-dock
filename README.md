@@ -72,6 +72,7 @@ New from [Desox's PR #1](https://github.com/Ragnatela666/mini-oled-dock/pull/1) 
 - **Spatial sound and volume mixer** (Desox): the volume popup lists the spatial formats really available on the current output (Windows Sonic, Dolby Atmos for Headphones, ...) and one row per app playing audio (up to 8, with mute and slider), plus System sounds.
 - **Customizable volume popup** (Desox): each section (Master volume, Output, Spatial sound, Mixer) can be collapsed; the pencil enters Customize mode, where an eye hides or shows a section and dragging its header reorders it. A collapsed or hidden section loads nothing.
 - **Fixes** (Desox): tray right-click menus open centred above their icon (G HUB's panel no longer jumps to the top-left corner), apps launched from the dock open in the foreground, and the Win key keeps Start open over fullscreen games that grab the foreground back.
+- **Fix** (VanheXen): the first click on Start (or any bar item that opens a popup) is no longer lost when another app is in front.
 - Auto-hide with a slide animation: the bar shows on the Win key or when the pointer touches the screen edge, and hides after 2.5 s.
 - Autostart without UAC prompts (scheduled task).
 - Watchdog process that always restores the native taskbar.
@@ -221,5 +222,7 @@ To render the screenshots, build with `DOCK_NO_MANIFEST=1` (a non-elevated manif
 A few Windows shell protocol structures in `src/tray_host.rs` are adapted from [lightbar](https://github.com/SauerExe/lightbar) (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Other shell projects were studied for protocol knowledge only; no AGPL code was copied.
 
 Huge thanks to [Desox](https://github.com/Desox96) for the excellent work on this project: the Start button, quick-links menu and window previews (PRs #1 and #2 upstream), and in this fork the tray menu placement and foreground fixes, Win opening Start, the IT/EN language switch, spatial audio and the per-app mixer, the customizable volume popup and the horizontal Start layout ([PR #1](https://github.com/Ragnatela666/mini-oled-dock/pull/1)). Clean, well-split, carefully tested contributions.
+
+Many thanks also to [VanheXen](https://github.com/VanheXen) for tracking down and fixing the lost first click on Start and the other popups when another app had the foreground ([PR #2](https://github.com/Ragnatela666/mini-oled-dock/pull/2)): a precise diagnosis from the logs and a one-line fix.
 
 [MIT](LICENSE) &copy; 2026 gitgiovik
