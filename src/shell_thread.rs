@@ -1243,16 +1243,17 @@ fn start_icon(id: &str, px: u32) -> Option<IconBitmap> {
     nonempty(icons::resize_area(&b?, px))
 }
 
-/// Version-resource strings of an executable, read through `IShellItem2::GetString`.
+/// Version-resource strings of an executable, read through `IShellItem2::GetString`. Also used by
+/// `tray_host` for the tray icons' app names. Needs COM initialized on the calling thread.
 #[derive(Default)]
-struct FileInfo {
-    description: Option<String>,
+pub(crate) struct FileInfo {
+    pub(crate) description: Option<String>,
     product: Option<String>,
     company: Option<String>,
 }
 
 impl FileInfo {
-    fn read(exe_path: &str) -> FileInfo {
+    pub(crate) fn read(exe_path: &str) -> FileInfo {
         let path = HSTRING::from(exe_path);
         // SAFETY: COM STA initialized; `path` lives for the call.
         let Ok(item) = (unsafe { SHCreateItemFromParsingName::<_, _, IShellItem2>(&path, None::<&IBindCtx>) }) else {

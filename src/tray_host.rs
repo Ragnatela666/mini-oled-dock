@@ -26,7 +26,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use windows::core::{w, GUID, PCWSTR, PWSTR};
+use windows::core::{w, GUID, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_SUCCESS, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -34,12 +34,12 @@ use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel, TOKEN_MANDATORY_LABEL,
     TOKEN_QUERY,
 };
-use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_SUBKEY_WOW6464KEY};
 use windows::Win32::System::Threading::{
-    GetCurrentProcessId, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    GetCurrentProcessId, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Shell::{SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared};
@@ -1850,38 +1850,9 @@ fn forward_sync(wp: WPARAM, lp: LPARAM) -> LRESULT {
     LRESULT(res as isize)
 }
 
-/// Full path of the exe of process `pid` (empty if it cannot be opened).
-fn exe_path_of_pid(pid: u32) -> String {
-    // SAFETY: no preconditions; if the process cannot be opened it returns Err.
-    let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
-        return String::new();
-    };
-    let mut buf = [0u16; 520];
-    let mut len = buf.len() as u32;
-    // SAFETY: `buf` is writable with `len` elements; `h` opened above.
-    let r = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) };
-    // SAFETY: handle opened above, closed exactly once.
-    let _ = unsafe { CloseHandle(h) };
-    if r.is_err() {
-        return String::new();
-    }
-    String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())])
-}
-
 /// File name of the exe from a full path.
 fn file_name_of(path: &str) -> String {
     path.rsplit('\\').next().unwrap_or("").to_string()
-}
-
-/// Version value `sub` inside block `buf`: pointer (into `buf`) and length.
-fn ver_query(buf: &[u64], sub: &str) -> Option<(*const u16, usize)> {
-    let wsub: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut p: *mut c_void = std::ptr::null_mut();
-    let mut len = 0u32;
-    // SAFETY: `buf` holds a valid version block (GetFileVersionInfoW succeeded); `p` and `len`
-    // are writable; `wsub` is NUL-terminated.
-    let ok = unsafe { VerQueryValueW(buf.as_ptr().cast::<c_void>(), PCWSTR(wsub.as_ptr()), &mut p, &mut len) };
-    (ok.as_bool() && !p.is_null() && len > 0).then_some((p.cast::<u16>().cast_const(), len as usize))
 }
 
 /// `file_description` with a per-exe-path cache (many apps register together at login).
@@ -1900,44 +1871,21 @@ fn cached_file_description(path: &str) -> String {
     name
 }
 
-/// `FileDescription` from the exe's version resources (empty if absent or unreadable).
+/// `FileDescription` of the exe (empty if absent or unreadable), read like the bar's app names
+/// (`shell_thread::FileInfo`, `IShellItem2`). Runs on the short-lived `tray-name` thread, so it
+/// initializes COM for the duration of the read.
 fn file_description(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    let wpath: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: `wpath` is NUL-terminated and lives for the whole call.
-    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(wpath.as_ptr()), None) };
-    if size == 0 || size > (1 << 20) {
-        return String::new();
+    // SAFETY: COM STA for this thread (FileInfo::read uses IShellItem2), paired with CoUninitialize below.
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let name = crate::shell_thread::FileInfo::read(path).description.unwrap_or_default();
+    if hr.is_ok() {
+        // SAFETY: paired with the successful CoInitializeEx above; the shell item was dropped by `read`.
+        unsafe { CoUninitialize() };
     }
-    // u64 buffer for alignment; `size` bytes are needed.
-    let mut buf = vec![0u64; (size as usize).div_ceil(8)];
-    // SAFETY: `buf` has at least `size` writable bytes; `wpath` NUL-terminated.
-    let r = unsafe { GetFileVersionInfoW(PCWSTR(wpath.as_ptr()), None, size, buf.as_mut_ptr().cast::<c_void>()) };
-    if r.is_err() {
-        return String::new();
-    }
-    let mut langs: Vec<String> = Vec::new();
-    if let Some((p, len)) = ver_query(&buf, "\\VarFileInfo\\Translation") {
-        if len >= 4 {
-            // SAFETY: `p` points inside `buf` to at least `len >= 4` bytes (16-bit language and codepage).
-            let (lang, cp) = unsafe { (std::ptr::read_unaligned(p), std::ptr::read_unaligned(p.add(1))) };
-            langs.push(format!("{lang:04x}{cp:04x}"));
-        }
-    }
-    langs.extend(["040904b0".to_string(), "040904e4".to_string(), "000004b0".to_string()]);
-    for l in langs {
-        if let Some((p, len)) = ver_query(&buf, &format!("\\StringFileInfo\\{l}\\FileDescription")) {
-            // SAFETY: for a version string `len` is the number of UTF-16 characters inside `buf`.
-            let sl = unsafe { std::slice::from_raw_parts(p, len) };
-            let d = utf16_until_nul(sl).trim().to_string();
-            if !d.is_empty() {
-                return d;
-            }
-        }
-    }
-    String::new()
+    name
 }
 
 /// RID of the "medium" integrity level (`SECURITY_MANDATORY_MEDIUM_RID`).
@@ -2056,7 +2004,7 @@ fn handle_nim(wp: WPARAM, lp: LPARAM, bytes: &[u8]) -> LRESULT {
     } else {
         IconUpdate::Keep
     };
-    let exe_path = if msg == NIM_ADD && pid != 0 { exe_path_of_pid(pid) } else { String::new() };
+    let exe_path = if msg == NIM_ADD && pid != 0 { crate::apps::exe_path_of_pid(pid).unwrap_or_default() } else { String::new() };
     let exe = file_name_of(&exe_path);
     let res = {
         let mut st = state();
@@ -2068,7 +2016,7 @@ fn handle_nim(wp: WPARAM, lp: LPARAM, bytes: &[u8]) -> LRESULT {
         // the host thread (the app is still blocked in its Shell_NotifyIcon). Reply immediately.
         let guid = (nid.flags & NIF_GUID != 0 && !guid_is_zero(&nid.guid)).then_some(nid.guid);
         let (uid, path) = (nid.uid, exe_path.clone());
-        if let Err(e) = std::thread::Builder::new().name("tray-name".into()).stack_size(128 * 1024).spawn(move || {
+        if let Err(e) = std::thread::Builder::new().name("tray-name".into()).stack_size(512 * 1024).spawn(move || {
             let name = cached_file_description(&path);
             if name.is_empty() {
                 return;
