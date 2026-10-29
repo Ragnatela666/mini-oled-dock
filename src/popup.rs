@@ -246,6 +246,10 @@ pub(crate) enum Button {
 pub(crate) enum DataEvent {
     Volume(VolumeState),
     AudioOutputs(Vec<OutputDevice>),
+    /// Spatial sound formats of the default output (`None` = not supported: section hidden).
+    Spatial(Option<crate::audio::SpatialState>),
+    /// Per-app audio sessions of the default output (volume mixer rows).
+    AudioSessions(Vec<crate::audio::AppSession>),
     NotifChanged,
     TrayChanged,
     Network(crate::net::NetInfo),
@@ -347,6 +351,11 @@ struct Open {
     tracking: bool,
     fade_start: u64,
     alpha: u8,
+    /// true while the bar's show/hide animation drives this popup (`link_to_bar`): `alpha` and `dy`
+    /// come from `follow_bar`, the popup's own fade is off.
+    linked: bool,
+    /// Vertical offset (px) of the linked slide, added to `pos` when presenting; 0 otherwise.
+    dy: i32,
     /// Foreground window at open time (tick safety net).
     fg_at_open: HWND,
     /// true once the popup has been seen as the foreground window.
@@ -471,9 +480,64 @@ pub fn close(reason: &str) {
     close_inner(reason);
 }
 
+/// Links the open popup to the bar's show/hide animation (Win with `win_opens_start`): its own fade
+/// stops and `follow_bar` sets its alpha and slide on the bar's frames. false if no popup is open.
+pub fn link_to_bar() -> bool {
+    let hwnd = with(|st| {
+        let o = st.open.as_mut()?;
+        o.linked = true;
+        Some(st.hwnd)
+    })
+    .flatten();
+    let Some(hwnd) = hwnd else { return false };
+    // SAFETY: timer of our window; fails harmlessly if it is not armed.
+    let _ = unsafe { KillTimer(Some(hwnd), TIMER_POPUP_ANIM) };
+    true
+}
+
+/// true if the open popup follows the bar's animation (`link_to_bar`).
+pub fn is_linked() -> bool {
+    STATE.with(|s| s.try_borrow().ok().and_then(|g| g.open.as_ref().map(|o| o.linked)).unwrap_or(false))
+}
+
+/// One frame of the bar's show/hide animation (`ui::on_vis_tick`): a linked popup is presented with
+/// the bar's slide `dy` and `alpha`, without repainting. `settled` with full alpha ends the link (the
+/// show is over). No-op when nothing is linked.
+pub fn follow_bar(dy: i32, alpha: u8, settled: bool) {
+    let prepared = with(|st| {
+        let hwnd = st.hwnd;
+        let o = st.open.as_mut()?;
+        if !o.linked {
+            return None;
+        }
+        o.dy = dy;
+        o.alpha = alpha;
+        if settled && alpha == 255 {
+            o.linked = false;
+            o.dy = 0;
+        }
+        let surf = o.surf.take()?;
+        Some((hwnd, surf, o.pos))
+    })
+    .flatten();
+    let Some((hwnd, surf, pos)) = prepared else { return };
+    surf.present(hwnd, pos.0, pos.1 + dy, alpha);
+    with(|st| {
+        if let Some(o) = st.open.as_mut() {
+            o.surf = Some(surf);
+        }
+    });
+}
+
 /// true if a popup is open (the UI suspends auto-hide).
 pub fn is_open() -> bool {
     STATE.with(|s| s.try_borrow().map(|g| g.open.is_some()).unwrap_or(false))
+}
+
+/// Window of the open popup (None if no popup is open).
+pub fn current_hwnd() -> Option<HWND> {
+    let h = POPUP_HWND.load(std::sync::atomic::Ordering::Relaxed);
+    (h != 0 && is_open()).then(|| HWND(h as *mut _))
 }
 
 /// Kind of the open popup (the UI keeps the plate on the matching item).
@@ -509,6 +573,20 @@ pub fn on_volume(st: VolumeState) {
 pub fn on_audio_outputs(list: Vec<OutputDevice>) {
     if is_open() {
         dispatch(DataEvent::AudioOutputs(list));
+    }
+}
+
+/// `ShellEvent::Spatial` reached the UI. Called by `ui`.
+pub fn on_audio_spatial(state: Option<crate::audio::SpatialState>) {
+    if current() == Some(PopupKind::Audio) {
+        dispatch(DataEvent::Spatial(state));
+    }
+}
+
+/// `ShellEvent::AudioSessions` reached the UI. Called by `ui`.
+pub fn on_audio_sessions(list: Vec<crate::audio::AppSession>) {
+    if current() == Some(PopupKind::Audio) {
+        dispatch(DataEvent::AudioSessions(list));
     }
 }
 
@@ -792,6 +870,8 @@ fn open(kind: PopupKind, anchor: Anchor) {
             tracking: false,
             fade_start: now_ms(),
             alpha: 0,
+            linked: false,
+            dy: 0,
             fg_at_open: fg,
             was_active: false,
             wheel_acc: 0,
@@ -892,13 +972,13 @@ fn render(relayout: bool) -> bool {
             o.pos = compute_pos(&o.anchor, w.max(1), h.max(1));
         }
         o.content.paint(&mut surf, o.hot, o.pressed);
-        Some((hwnd, surf, o.pos, o.alpha))
+        Some((hwnd, surf, o.pos, o.alpha, o.dy))
     })
     .flatten();
-    let Some((hwnd, surf, pos, alpha)) = prepared else { return false };
+    let Some((hwnd, surf, pos, alpha, dy)) = prepared else { return false };
     let (sw, sh) = surf.size();
     store_rect(&POPUP_RECT, &RECT { left: pos.0, top: pos.1, right: pos.0 + sw, bottom: pos.1 + sh });
-    let ok = surf.present(hwnd, pos.0, pos.1, alpha);
+    let ok = surf.present(hwnd, pos.0, pos.1 + dy, alpha);
     with(|st| {
         if let Some(o) = st.open.as_mut() {
             o.surf = Some(surf);
@@ -949,7 +1029,8 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
     match msg {
         WM_ACTIVATE => {
             if (wp.0 & 0xFFFF) as u32 == WA_INACTIVE {
-                on_inactive();
+                // lParam: the window being activated (may be null or of another thread).
+                on_inactive(HWND(lp.0 as *mut _));
             } else {
                 mark_active(hwnd);
             }
@@ -1045,9 +1126,14 @@ fn mark_active(hwnd: HWND) {
     }
 }
 
-fn on_inactive() {
+fn on_inactive(other: HWND) {
     let kind = with(|st| st.open.as_ref().map(|o| o.kind)).flatten();
     if let Some(k) = kind {
+        // A fullscreen app bouncing the foreground back right after we took it: the UI re-takes it.
+        if crate::ui::fs_bounce_grace(other) {
+            log!("popup: focus lost to the fullscreen app's bounce: staying open");
+            return;
+        }
         with(|st| st.last_inactive = Some((k, now_ms())));
         close_inner("focus lost");
     }
@@ -1212,6 +1298,10 @@ fn on_set_cursor(hwnd: HWND) -> bool {
 fn on_anim(hwnd: HWND) {
     let done = with(|st| {
         let o = st.open.as_mut()?;
+        if o.linked {
+            // The bar's animation drives the alpha (`follow_bar`): the own fade stops here.
+            return Some(true);
+        }
         let el = now_ms().saturating_sub(o.fade_start);
         let a = ((el * 255) / FADE_MS).min(255) as u8;
         o.alpha = a;
@@ -1261,7 +1351,7 @@ fn on_tick(hwnd: HWND) {
         // Activation was seen: if the foreground is now another window, WA_INACTIVE was missed.
         // SAFETY: no preconditions.
         let fg = unsafe { GetForegroundWindow() };
-        if fg != hwnd && !fg.0.is_null() {
+        if fg != hwnd && !fg.0.is_null() && !crate::ui::fs_bounce_grace(fg) {
             close_inner("foreground changed");
             return;
         }
@@ -1275,7 +1365,7 @@ fn on_tick(hwnd: HWND) {
                     o.was_active = true;
                 }
             });
-        } else if fg != fg_at_open {
+        } else if fg != fg_at_open && !crate::ui::fs_bounce_grace(fg) {
             close_inner("foreground changed");
             return;
         }

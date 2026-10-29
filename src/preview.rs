@@ -272,6 +272,37 @@ fn mock_outputs() -> Vec<OutputDevice> {
     ]
 }
 
+/// Mock spatial sound: Off, Windows Sonic (current), Dolby Atmos for Headphones.
+fn mock_spatial() -> crate::audio::SpatialState {
+    use crate::audio::{SpatialKind, SpatialOption};
+    let opt = |kind, subtype: &str| SpatialOption { kind, subtype: subtype.to_string() };
+    crate::audio::SpatialState {
+        options: vec![
+            opt(SpatialKind::Off, ""),
+            opt(SpatialKind::WindowsSonic, "sonic"),
+            opt(SpatialKind::DolbyAtmosHeadphones, "atmos"),
+        ],
+        current: Some(1),
+    }
+}
+
+/// Mock mixer rows.
+fn mock_sessions() -> Vec<crate::audio::AppSession> {
+    let row = |pid, system, name: &str, level, muted| crate::audio::AppSession {
+        pid,
+        system,
+        name: name.to_string(),
+        level,
+        muted,
+    };
+    vec![
+        row(10, false, "Google Chrome", 80, false),
+        row(20, false, "Spotify", 45, false),
+        row(30, false, "Discord", 100, true),
+        row(0, true, "System sounds", 60, false),
+    ]
+}
+
 /// Mock network: Wi-Fi with a good signal and internet.
 fn mock_net() -> NetInfo {
     NetInfo {
@@ -510,6 +541,8 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
         "popup_audio" => {
             let mut c = crate::popup_audio::new(VolumeState { level: 60, muted: false, available: true });
             c.data(&DataEvent::AudioOutputs(mock_outputs()));
+            c.data(&DataEvent::Spatial(Some(mock_spatial())));
+            c.data(&DataEvent::AudioSessions(mock_sessions()));
             c
         }
         "popup_calendar" => crate::popup_calendar::new(),
@@ -568,7 +601,12 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
             can_launch: true,
         }),
         "popup_start" => crate::popup::popup_start::preview_new(),
-        "popup_startmenu" | "popup_startmenu_search" => {
+        "popup_settings_startmenu" => crate::popup_settings::preview_new(Page::StartMenu, false),
+        "popup_startmenu"
+        | "popup_startmenu_search"
+        | "popup_startmenu_h"
+        | "popup_startmenu_h_all"
+        | "popup_startmenu_h_power" => {
             const APPS: [(&str, char, u32); 20] = [
                 ("Adobe Acrobat", 'A', 0xB30B00),
                 ("Calculator", 'C', 0x3A3A3C),
@@ -608,7 +646,18 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
             let apps =
                 APPS.iter().map(|&(n, l, c)| (n.to_lowercase(), n.to_string(), mock_icon(l, c, m.px(32)))).collect();
             let query = if name == "popup_startmenu_search" { "te" } else { "" };
-            crate::popup::popup_startmenu::preview_new(apps, query)
+            let style = if name.starts_with("popup_startmenu_h") {
+                crate::config::StartStyle::Horizontal
+            } else {
+                crate::config::StartStyle::Vertical
+            };
+            crate::popup::popup_startmenu::preview_new(
+                apps,
+                query,
+                style,
+                name == "popup_startmenu_h_all",
+                name == "popup_startmenu_h_power",
+            )
         }
         "popup_tray" | "popup_tray_customize" => {
             let ic = mock_icons(m, BarSizes::default());
@@ -767,10 +816,15 @@ pub fn run(dir: &str) -> i32 {
             ("popup_settings_background", 4),
             ("popup_settings_presets", 3),
             ("popup_settings_sizes", 5),
+            ("popup_settings_startmenu", 1),
             ("popup_app", 1),
             ("popup_start", 4),
             ("popup_startmenu", 12),
             ("popup_startmenu_search", 1),
+            ("popup_startmenu_h", 5),
+            ("popup_startmenu_h_all", 6),
+            // Flyout open: control 0 is its backdrop, then the flyout rows (2 = "Lock").
+            ("popup_startmenu_h_power", 2),
             ("popup_tray", 1),
             ("popup_tray_customize", 2),
         ] {

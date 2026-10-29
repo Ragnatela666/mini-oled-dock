@@ -429,12 +429,43 @@ pub fn check_shape(u: f32, v: f32) -> bool {
     polyline(u, v, &[(3.5, 8.5), (6.5, 11.5), (12.5, 4.5)], half())
 }
 
+/// Pencil (audio popup "Customize"): diagonal body outline with a pointed tip at the bottom left.
+pub fn pencil_shape(u: f32, v: f32) -> bool {
+    let st = half();
+    // Body: two parallel edges from the eraser end (top right) down to the tip cone.
+    let body = polyline(u, v, &[(10.2, 2.4), (13.6, 5.8), (6.0, 13.4), (2.6, 13.4), (2.6, 10.0), (10.2, 2.4)], st);
+    let ferrule = dist_seg(u, v, 8.6, 4.0, 12.0, 7.4) <= st;
+    body || ferrule
+}
+
+/// Eye (audio popup "Show / hide"): almond outline with a pupil; `off` adds a diagonal bar with an
+/// empty halo (same technique as the muted speaker).
+pub fn eye_shape(u: f32, v: f32, off: bool) -> bool {
+    let st = half();
+    let c = ax();
+    // Almond: two circle arcs meeting at the corners (1.5, 8) and (14.5, 8).
+    let (dx, dt, db) = (u - c, v - 13.2, v - 2.8);
+    let upper = v <= 8.0 && ((dx * dx + dt * dt).sqrt() - 8.0).abs() <= st;
+    let lower = v >= 8.0 && ((dx * dx + db * db).sqrt() - 8.0).abs() <= st;
+    let (px, py) = (u - c, v - 8.0);
+    let pupil = px * px + py * py <= 2.0 * 2.0;
+    let shape = upper || lower || pupil;
+    if !off {
+        return shape;
+    }
+    let d = dist_seg(u, v, 2.5, 2.5, 13.5, 13.5);
+    (shape && d > st + 1.0) || d <= st
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn shapes_hit_expected_points() {
+        assert!(pencil_shape(2.6, 12.0) && !pencil_shape(13.0, 13.0));
+        assert!(eye_shape(8.0, 8.0, false) && !eye_shape(1.0, 1.0, false));
+        assert!(eye_shape(2.5, 2.5, true));
         assert!(bell_shape(8.0, 11.6)); // rim
         assert!(!bell_shape(8.0, 8.0)); // empty interior
         assert!(badge_shape(12.75, 3.25));

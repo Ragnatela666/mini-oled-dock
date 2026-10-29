@@ -39,6 +39,7 @@ mod config;
 mod datadir;
 mod glyphs;
 mod hook;
+mod i18n;
 mod icons;
 mod logger;
 mod mem;
@@ -59,6 +60,7 @@ mod power;
 mod preview;
 mod render;
 mod shell_thread;
+mod start_import;
 mod surface;
 mod taskbar;
 mod tray_host;
@@ -305,11 +307,11 @@ unsafe extern "system" fn wnd_proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> L
             _ => dispatch_to_ui(h, m, wp, lp),
         },
         WM_DOCK_TOGGLE => {
-            ui::toggle();
+            ui::win_tap();
             LRESULT(0)
         }
         WM_DOCK_START_MENU => {
-            ui::open_start_menu();
+            ui::win_double_tap();
             LRESULT(0)
         }
         WM_DOCK_WINKEY => {

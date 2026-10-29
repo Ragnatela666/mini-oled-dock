@@ -24,6 +24,8 @@ windows = { version = "0.62.2", features = [
     "Data_Xml_Dom",
     "Foundation",
     "Foundation_Collections",
+    # Spatial sound selector of the audio popup (SpatialAudioDeviceConfiguration, SpatialAudioFormatSubtype).
+    "Media_Audio",
     "Storage_Streams",
     "UI_Notifications",
     "UI_Notifications_Management",

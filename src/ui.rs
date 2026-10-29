@@ -123,6 +123,11 @@ const TIMER_WIDTH: usize = 40;
 /// After a popup closes, a foreground change to the fullscreen app within this
 /// time (ms) is the automatic focus return and does not hide the dock.
 const POPUP_CLOSE_GRACE_MS: u64 = 400;
+/// Right after the dock/popup take the foreground over a fullscreen app, a foreground change back
+/// to that app within this time (ms) is the app bouncing it back (or a stale event), not the user.
+const FS_BOUNCE_GRACE_MS: u64 = 800;
+/// How many times the foreground is re-taken after such a bounce, per show of the dock.
+const FS_MAX_RETAKES: u32 = 2;
 /// Duration of the width animation (ms, out-cubic).
 const WIDTH_ANIM_MS: u64 = 160;
 /// Timer of the attention blink (local id).
@@ -167,6 +172,10 @@ static EDGE_ARMED: AtomicBool = AtomicBool::new(true);
 static FS_SHOWN: AtomicBool = AtomicBool::new(false);
 /// HWND (as isize) of the fullscreen app under the dock, to give it the foreground back.
 static FS_PREV: AtomicIsize = AtomicIsize::new(0);
+/// Tick (ms) of the last `force_foreground` call (0 = never).
+static FG_TAKEN_AT: AtomicU64 = AtomicU64::new(0);
+/// Foreground re-takes after a fullscreen bounce since the dock was shown.
+static FS_RETAKES: AtomicU32 = AtomicU32::new(0);
 /// Previous state of the left/right mouse buttons (falling-edge detection).
 static CLICK_DOWN: AtomicBool = AtomicBool::new(false);
 /// Id of the registered "SHELLHOOK" window message (0 = not registered).
@@ -590,6 +599,61 @@ pub fn toggle() {
         hide_dock("Win alone (toggle)");
     } else {
         show_dock(if moved { "Win alone (pointer display)" } else { "Win alone (toggle)" }, SHOW_MS);
+    }
+}
+
+/// Lone Win tap (`WM_DOCK_TOGGLE`). With `config.win_opens_start` it opens / closes the Start menu
+/// together with the bar (`start_with_bar`), otherwise it shows / hides the bar (`toggle`).
+pub fn win_tap() {
+    if config::get().win_opens_start {
+        start_with_bar();
+    } else {
+        toggle();
+    }
+}
+
+/// Second quick Win tap (`WM_DOCK_START_MENU`). With `config.win_opens_start` every tap is the same
+/// toggle (`start_with_bar`), otherwise it opens the Start menu (`open_start_menu`).
+pub fn win_double_tap() {
+    if config::get().win_opens_start {
+        start_with_bar();
+    } else {
+        open_start_menu();
+    }
+}
+
+/// `win_opens_start`: the Start menu and the bar appear and disappear as ONE animation. A hidden bar
+/// is shown and the Start menu is linked to its slide+fade (`popup::link_to_bar`: same level, same
+/// frame, presented from `on_vis_tick`); with the Start menu open, the bar hides and the menu is linked
+/// to the hide animation, then closes on its last frame. A tap during that hide reverses both. With
+/// auto-hide off the bar stays and only the Start menu closes.
+fn start_with_bar() {
+    if popup::current() == Some(PopupKind::StartMenu) {
+        if !VISIBLE.load(Relaxed) && popup::is_linked() {
+            show_dock("Win (Start + bar, reversed)", SHOW_MS);
+        } else if VISIBLE.load(Relaxed) && config::effective_autohide() {
+            popup::link_to_bar();
+            hide_dock("Win (Start + bar)");
+        } else {
+            popup::close("Win (Start)");
+        }
+        return;
+    }
+    follow_pointer();
+    let was_visible = VISIBLE.load(Relaxed);
+    if !was_visible {
+        show_dock("Win (Start + bar)", SHOW_MS);
+    }
+    match anchor_for(ItemId::Start).or_else(bar_start_anchor) {
+        Some(a) => popup::toggle(PopupKind::StartMenu, a),
+        None => {
+            log!("start_with_bar: the bar has no geometry yet");
+            return;
+        }
+    }
+    if !was_visible && popup::current() == Some(PopupKind::StartMenu) && popup::link_to_bar() {
+        let (dy, alpha) = vis_offset(config_top());
+        popup::follow_bar(dy, alpha, false);
     }
 }
 
@@ -1110,6 +1174,10 @@ fn on_vis_tick(h: HWND) {
     if done {
         stop_vis_anim(a.to);
         if a.to <= 0.0 {
+            // A popup linked to the hide (Win with the Start menu open) goes away on the same frame.
+            if popup::is_linked() {
+                popup::close("bar hidden (with Start)");
+            }
             hide_window(h);
             return;
         }
@@ -1117,6 +1185,8 @@ fn on_vis_tick(h: HWND) {
     let Some(g) = GEOM.with(|g| g.get()) else { return };
     let (dy, alpha) = vis_offset(config_top());
     render::present_alpha(h, g.x, g.y + dy, alpha);
+    // Same level, same tick: a linked popup moves with the bar (released once the show settles).
+    popup::follow_bar(dy, alpha, done);
 }
 
 // ------------------------------------------------------------ attention (FlashWindowEx)
@@ -1387,6 +1457,15 @@ fn apply_shell_event(ev: ShellEvent) -> bool {
             popup::on_start_icons(icon_px, icons);
             return false;
         }
+        // Spatial sound and per-app mixer data: only the audio popup uses them.
+        ShellEvent::Spatial(state) => {
+            popup::on_audio_spatial(state);
+            return false;
+        }
+        ShellEvent::AudioSessions(list) => {
+            popup::on_audio_sessions(list);
+            return false;
+        }
         other => other,
     };
     UI.with(|u| {
@@ -1420,7 +1499,11 @@ fn apply_shell_event(ev: ShellEvent) -> bool {
                 false
             }
             // Handled before the borrow.
-            ShellEvent::Network(_) | ShellEvent::StartApps(_) | ShellEvent::StartIcons { .. } => false,
+            ShellEvent::Network(_)
+            | ShellEvent::StartApps(_)
+            | ShellEvent::StartIcons { .. }
+            | ShellEvent::Spatial(_)
+            | ShellEvent::AudioSessions(_) => false,
         }
     })
 }
@@ -1679,7 +1762,7 @@ fn on_hover_picker_timer(h: HWND) {
     }
     let Some((i, key, name)) = multi_window_app(hover) else { return };
     let Some(a) = anchor_for(ItemId::App(i)) else { return };
-    let name = if name.is_empty() { "Window".to_string() } else { name };
+    let name = if name.is_empty() { crate::i18n::tr("Window", "Finestra").to_string() } else { name };
     crate::picker::open(a, &key, &name, &apps::windows_in_order(&key));
 }
 
@@ -2753,6 +2836,7 @@ pub fn show_dock(reason: &str, hide_after_ms: u64) {
     if !was_visible {
         FS_SHOWN.store(fs.is_some(), Relaxed);
         FS_PREV.store(fs.map(|h| h.0 as isize).unwrap_or(0), Relaxed);
+        FS_RETAKES.store(0, Relaxed);
         CLICK_DOWN.store(mouse_buttons_down(), Relaxed);
         if let Some(h) = fs {
             log!("  fullscreen foreground window: \"{}\"", window_title(h));
@@ -2770,7 +2854,10 @@ pub fn hide_dock(reason: &str) {
     // Hiding over a fullscreen app is instant; otherwise slide+fade out.
     let instant = FS_SHOWN.swap(false, Relaxed);
     let prev = if instant { FS_PREV.swap(0, Relaxed) } else { 0 };
-    crate::popup::close("dock hidden");
+    // A popup linked to the bar (`start_with_bar`) fades out with it and closes in `on_vis_tick`.
+    if instant || !crate::popup::is_linked() {
+        crate::popup::close("dock hidden");
+    }
     picker_cancel("dock hidden");
     if instant {
         stop_vis_anim(0.0);
@@ -3002,6 +3089,13 @@ fn on_foreground_changed(fg: HWND) {
     if !VISIBLE.load(Relaxed) || fg.0.is_null() || is_own_window(fg) || tray_host::foreign_menu_active() {
         return;
     }
+    // The event is posted: by now the foreground may already be ours again (stale event).
+    // SAFETY: no preconditions.
+    let cur = unsafe { GetForegroundWindow() };
+    if !cur.0.is_null() && is_own_window(cur) {
+        log!("foreground event ignored: the foreground is ours again");
+        return;
+    }
     let Some(g) = GEOM.with(|g| g.get()) else { return };
     if FS_SHOWN.load(Relaxed) {
         // Closing one of our popups gives the foreground back to the game: it is not a user click.
@@ -3010,10 +3104,31 @@ fn on_foreground_changed(fg: HWND) {
             log!("foreground returned to the game by closing a popup: the dock stays");
             return;
         }
+        // The game bounced the foreground back right after we took it: take it again (a few times).
+        if fs_bounce_grace(fg) && FS_RETAKES.load(Relaxed) < FS_MAX_RETAKES {
+            let n = FS_RETAKES.fetch_add(1, Relaxed) + 1;
+            log!("fullscreen app bounced the foreground back right after the dock took it: re-taking it ({n})");
+            force_foreground(popup::current_hwnd().unwrap_or_else(hwnd));
+            return;
+        }
         hide_dock("foreground moved to another window (fullscreen)");
     } else if fullscreen_window(&g.mon).is_some() {
         hide_dock("a fullscreen app took the foreground");
     }
+}
+
+/// true if `fg` is the fullscreen app under the dock and the dock/popup took the foreground less
+/// than `FS_BOUNCE_GRACE_MS` ago: the change is the app bouncing it back, not a user action.
+/// `pub` because `popup` must not close on that bounce either.
+pub fn fs_bounce_grace(fg: HWND) -> bool {
+    FS_SHOWN.load(Relaxed)
+        && fg.0 as isize == FS_PREV.load(Relaxed)
+        && within_grace(now_ms(), FG_TAKEN_AT.load(Relaxed), FS_BOUNCE_GRACE_MS)
+}
+
+/// true if `taken_at` (0 = never) is less than `grace` ms before `now`.
+fn within_grace(now: u64, taken_at: u64, grace: u64) -> bool {
+    taken_at != 0 && now.saturating_sub(taken_at) < grace
 }
 
 /// "Foreground" fallback (the foreground fallback of the original design).
@@ -3022,6 +3137,7 @@ fn on_foreground_changed(fg: HWND) {
 /// lock) and SetForegroundWindow again. The outcome of each is in the log.
 /// `pub` because `popup` also uses it to activate the popup window.
 pub fn force_foreground(h: HWND) {
+    FG_TAKEN_AT.store(now_ms(), Relaxed);
     // SAFETY: no preconditions.
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
@@ -3203,5 +3319,14 @@ mod tests {
         reorder_pinned(&mut c, &["c".to_string(), "a".to_string(), "b".to_string()]);
         let keys: Vec<&str> = c.pinned.iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["c", "x", "a", "b"]);
+    }
+
+    #[test]
+    fn bounce_grace_window_edges() {
+        assert!(!within_grace(1000, 0, 800), "never taken");
+        assert!(within_grace(1000, 1000, 800));
+        assert!(within_grace(1799, 1000, 800));
+        assert!(!within_grace(1800, 1000, 800));
+        assert!(within_grace(900, 1000, 800), "clock before the take saturates to 0");
     }
 }

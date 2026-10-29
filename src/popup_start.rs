@@ -11,7 +11,6 @@
 //!
 //! Declared as a child module of `popup` (`#[path]`).
 
-use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
 
 use crate::popup::{center_y, hline, lift, row_plate, Content, HitMap, PopupKind, Reply};
@@ -34,8 +33,6 @@ enum Act {
 
 const VK_S: VIRTUAL_KEY = VIRTUAL_KEY(0x53);
 const VK_R: VIRTUAL_KEY = VIRTUAL_KEY(0x52);
-/// `PRIMARYLANGID` of Italian (`LANG_ITALIAN`; its feature module is not enabled for one constant).
-const LANG_ITALIAN: u16 = 0x10;
 
 /// Rows in the order of the native Win+X menu (`None` = separator). The row id is its index + 1.
 const ROWS: [Option<Act>; 18] = [
@@ -59,7 +56,7 @@ const ROWS: [Option<Act>; 18] = [
     Some(Act::SignOut),
 ];
 
-// This menu is the only localized part of the dock (Italian UI language, English otherwise).
+// The labels follow the dock language (`i18n`), like every other text.
 /// English labels by row index (`""` = separator).
 const LABELS_EN: &[&str] = &[
     "Installed apps",
@@ -110,12 +107,7 @@ fn label(i: usize, italian: bool) -> &'static str {
     table.get(i).copied().unwrap_or("")
 }
 
-/// True when the user's Windows UI language is Italian (`PRIMARYLANGID == LANG_ITALIAN`).
-pub(crate) fn ui_is_italian() -> bool {
-    // SAFETY: no arguments, no preconditions; returns a LANGID.
-    let langid = unsafe { GetUserDefaultUILanguage() };
-    langid & 0x3ff == LANG_ITALIAN
-}
+
 
 pub(crate) struct StartPopup {
     hits: HitMap,
@@ -126,9 +118,9 @@ pub(crate) struct StartPopup {
     italian: bool,
 }
 
-/// Creates the content (initial state), labels in the user's UI language.
+/// Creates the content (initial state), labels in the dock language (`i18n`).
 pub(crate) fn new() -> Box<dyn Content> {
-    with_language(ui_is_italian())
+    with_language(crate::i18n::italian())
 }
 
 /// Preview: always English, so the README screenshot does not depend on the machine.
