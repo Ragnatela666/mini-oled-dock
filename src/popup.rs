@@ -30,9 +30,7 @@ use std::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromRect, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
+use windows::Win32::Graphics::Gdi::{MonitorFromRect, ScreenToClient, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -815,13 +813,7 @@ fn ensure_window() -> Option<HWND> {
 pub(crate) fn work_area(bar: &RECT) -> RECT {
     // SAFETY: `bar` is valid; MONITOR_DEFAULTTONEAREST always returns a monitor.
     let mon = unsafe { MonitorFromRect(bar, MONITOR_DEFAULTTONEAREST) };
-    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    // SAFETY: `mi` has the correct cbSize.
-    if unsafe { GetMonitorInfoW(mon, &mut mi) }.as_bool() {
-        mi.rcWork
-    } else {
-        *bar
-    }
+    crate::ui::monitor_info(mon).map_or(*bar, |mi| mi.rcWork)
 }
 
 /// Top-left corner position of a `w` x `h` popup (also used by the window picker).

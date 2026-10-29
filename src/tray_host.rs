@@ -1755,16 +1755,10 @@ fn host_rect(g: &TrayGeometry, mon: RECT) -> RECT {
 
 /// Monitor rectangle of `r` (nearest monitor); empty on failure.
 fn monitor_rect_of(r: &RECT) -> RECT {
-    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONEAREST};
     // SAFETY: `r` is a valid RECT; MONITOR_DEFAULTTONEAREST always returns a monitor.
     let mon = unsafe { MonitorFromRect(r, MONITOR_DEFAULTTONEAREST) };
-    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    // SAFETY: `mi` is writable with `cbSize` set.
-    if unsafe { GetMonitorInfoW(mon, &mut mi) }.as_bool() {
-        mi.rcMonitor
-    } else {
-        EMPTY_RECT
-    }
+    crate::ui::monitor_info(mon).map_or(EMPTY_RECT, |mi| mi.rcMonitor)
 }
 
 fn resize_host(hwnd: HWND) {

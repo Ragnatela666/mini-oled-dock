@@ -639,15 +639,21 @@ fn start_with_bar() {
         }
         return;
     }
+    toggle_start_menu("Win (Start + bar)");
+}
+
+/// Toggles the dock's Start menu on the bar, which in "pointer" mode is first brought to the display
+/// under the pointer. A hidden bar is shown and an opening menu is linked to its slide+fade.
+fn toggle_start_menu(reason: &str) {
     follow_pointer();
     let was_visible = VISIBLE.load(Relaxed);
     if !was_visible {
-        show_dock("Win (Start + bar)", SHOW_MS);
+        show_dock(reason, SHOW_MS);
     }
     match anchor_for(ItemId::Start).or_else(bar_start_anchor) {
         Some(a) => popup::toggle(PopupKind::StartMenu, a),
         None => {
-            log!("start_with_bar: the bar has no geometry yet");
+            log!("toggle_start_menu: the bar has no geometry yet");
             return;
         }
     }
@@ -662,14 +668,7 @@ fn start_with_bar() {
 /// to the display under the pointer. The first tap already toggled the bar, so it is shown again if
 /// that tap hid it.
 pub fn open_start_menu() {
-    follow_pointer();
-    if !VISIBLE.load(Relaxed) {
-        show_dock("Win double tap (Start menu)", SHOW_MS);
-    }
-    match anchor_for(ItemId::Start).or_else(bar_start_anchor) {
-        Some(a) => popup::toggle(PopupKind::StartMenu, a),
-        None => log!("open_start_menu: the bar has no geometry yet"),
-    }
+    toggle_start_menu("Win double tap (Start menu)");
 }
 
 /// Anchor at the left end of the bar, for the Start popup when the Start button is hidden.
@@ -719,10 +718,7 @@ fn follow_pointer() -> bool {
     popup::close("bar moved to the pointer display");
     picker_cancel("bar moved to the pointer display");
     if VISIBLE.load(Relaxed) {
-        stop_vis_anim(0.0);
-        hide_window(hwnd());
-        VISIBLE.store(false, Relaxed);
-        reset_hover();
+        hide("bar moved to the pointer display", true);
     }
     apply_dpi(dock_dpi());
     true
@@ -1259,7 +1255,7 @@ fn on_attn_tick(h: HWND) {
     }
 }
 
-/// Destroys the UI resources (`render::destroy`, `apps::remove_winevent_hook`). In `cleanup`.
+/// Destroys the UI resources (`render::destroy`; `main::cleanup` removes the apps WinEventHook).
 pub fn shutdown() {
     kill_timer(hwnd(), TIMER_ANIM);
     kill_timer(hwnd(), TIMER_VIS);
@@ -1268,7 +1264,6 @@ pub fn shutdown() {
         // SAFETY: `hwnd()` is our window, registered in `attach`.
         let _ = unsafe { DeregisterShellHookWindow(hwnd()) };
     }
-    apps::remove_winevent_hook(); // idempotent: main already calls it in cleanup
     render::destroy();
 }
 
@@ -2727,13 +2722,14 @@ fn dock_dpi() -> u32 {
 }
 
 fn dock_monitor() -> Result<MONITORINFO, String> {
-    let mon = dock_hmonitor();
+    monitor_info(dock_hmonitor()).ok_or_else(|| "GetMonitorInfoW failed".into())
+}
+
+/// Monitor and work area rects of display `h` (`None` if the call fails).
+pub(crate) fn monitor_info(h: HMONITOR) -> Option<MONITORINFO> {
     let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
     // SAFETY: `mi` has cbSize initialized and is writable.
-    if !unsafe { GetMonitorInfoW(mon, &mut mi) }.as_bool() {
-        return Err("GetMonitorInfoW failed".into());
-    }
-    Ok(mi)
+    unsafe { GetMonitorInfoW(h, &mut mi) }.as_bool().then_some(mi)
 }
 
 /// Geometry: bar of `bar_w` physical px, horizontally centered on the work area of the bar's
@@ -2858,9 +2854,15 @@ pub fn show_dock(reason: &str, hide_after_ms: u64) {
 /// Hides the dock. If it was over a fullscreen app and the foreground is still ours (timeout,
 /// Win key), it gives the foreground back to that app.
 pub fn hide_dock(reason: &str) {
+    hide(reason, false);
+}
+
+/// `hide_dock` without the slide+fade out (`now`), or with it unless over a fullscreen app.
+fn hide(reason: &str, now: bool) {
     // Hiding over a fullscreen app is instant; otherwise slide+fade out.
-    let instant = FS_SHOWN.swap(false, Relaxed);
-    let prev = if instant { FS_PREV.swap(0, Relaxed) } else { 0 };
+    let fs = FS_SHOWN.swap(false, Relaxed);
+    let instant = now || fs;
+    let prev = if fs { FS_PREV.swap(0, Relaxed) } else { 0 };
     // A popup linked to the bar (`start_with_bar`) fades out with it and closes in `on_vis_tick`.
     if instant || !crate::popup::is_linked() {
         crate::popup::close("dock hidden");
@@ -3079,9 +3081,7 @@ fn fullscreen_window(mon: &RECT) -> Option<HWND> {
     // The window's monitor must be the dock's, and the window must cover it entirely.
     // SAFETY: MonitorFromWindow with NEAREST always returns a monitor.
     let hm = unsafe { MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) };
-    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    // SAFETY: `mi` has cbSize initialized and is writable.
-    if !unsafe { GetMonitorInfoW(hm, &mut mi) }.as_bool() || !rect_eq(&mi.rcMonitor, mon) {
+    if !monitor_info(hm).is_some_and(|mi| rect_eq(&mi.rcMonitor, mon)) {
         return None;
     }
     let full = r.left <= mon.left && r.top <= mon.top && r.right >= mon.right && r.bottom >= mon.bottom;
@@ -3201,13 +3201,6 @@ fn edge_is_screen_border(mon: &RECT, x: i32) -> bool {
     other.0.is_null()
 }
 
-/// Full rect of the display under `p`.
-fn pointer_mon_rect(p: POINT) -> Option<RECT> {
-    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    // SAFETY: MonitorFromPoint with MONITOR_DEFAULTTONEAREST always returns a monitor; `mi` has cbSize set.
-    unsafe { GetMonitorInfoW(MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool().then_some(mi.rcMonitor)
-}
-
 fn point_in(r: &RECT, p: POINT) -> bool {
     p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
 }
@@ -3271,7 +3264,7 @@ fn on_poll() {
     // "pointer" mode: on the display under the pointer, which the bar then moves to (even while still
     // visible on another display).
     let follow = follows_pointer();
-    let mon = if follow { pointer_mon_rect(p).unwrap_or(g.mon) } else { g.mon };
+    let mon = if follow { monitor_info(pointer_hmonitor()).map_or(g.mon, |mi| mi.rcMonitor) } else { g.mon };
     let other_display = !rect_eq(&mon, &g.mon);
     let edge_y = if config_top() { mon.top } else { mon.bottom - 1 };
     let at_edge = p.y == edge_y && p.x >= mon.left && p.x < mon.right && edge_is_screen_border(&mon, p.x);
