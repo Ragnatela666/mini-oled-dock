@@ -704,7 +704,8 @@ fn pointer_hmonitor() -> HMONITOR {
 }
 
 /// "pointer" mode: brings the bar to the display under the pointer (metrics, fonts, icons and
-/// geometry follow that display's DPI). Returns true if the bar changed display.
+/// geometry follow that display's DPI). Returns true if the bar changed display; a bar visible on the
+/// old display is hidden at once there, so the caller's `show_dock` slides it in on the new one.
 fn follow_pointer() -> bool {
     if !follows_pointer() {
         return false;
@@ -717,6 +718,12 @@ fn follow_pointer() -> bool {
     // A popup or the picker anchored to the old position would be left behind.
     popup::close("bar moved to the pointer display");
     picker_cancel("bar moved to the pointer display");
+    if VISIBLE.load(Relaxed) {
+        stop_vis_anim(0.0);
+        hide_window(hwnd());
+        VISIBLE.store(false, Relaxed);
+        reset_hover();
+    }
     apply_dpi(dock_dpi());
     true
 }
@@ -3187,11 +3194,18 @@ fn send_f15() -> u32 {
 
 /// With several monitors: the edge `y == mon.top` (or `mon.bottom - 1`) is a real screen border
 /// only if there is no other monitor right beyond it (otherwise the cursor crosses it freely).
-fn edge_is_screen_border(g: &Geom, x: i32) -> bool {
-    let beyond = if config_top() { POINT { x, y: g.mon.top - 1 } } else { POINT { x, y: g.mon.bottom } };
+fn edge_is_screen_border(mon: &RECT, x: i32) -> bool {
+    let beyond = if config_top() { POINT { x, y: mon.top - 1 } } else { POINT { x, y: mon.bottom } };
     // SAFETY: MonitorFromPoint with MONITOR_DEFAULTTONULL has no preconditions; returns NULL if outside.
     let other = unsafe { MonitorFromPoint(beyond, MONITOR_DEFAULTTONULL) };
     other.0.is_null()
+}
+
+/// Full rect of the display under `p`.
+fn pointer_mon_rect(p: POINT) -> Option<RECT> {
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    // SAFETY: MonitorFromPoint with MONITOR_DEFAULTTONEAREST always returns a monitor; `mi` has cbSize set.
+    unsafe { GetMonitorInfoW(MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool().then_some(mi.rcMonitor)
 }
 
 fn point_in(r: &RECT, p: POINT) -> bool {
@@ -3254,12 +3268,17 @@ fn on_poll() {
         }
     }
     // Screen edge: y==top (bar at the top) or y==bottom-1 (bar at the bottom), on the bar's display.
-    let edge_y = if config_top() { g.mon.top } else { g.mon.bottom - 1 };
-    let at_edge = p.y == edge_y && p.x >= g.mon.left && p.x < g.mon.right && edge_is_screen_border(&g, p.x);
+    // "pointer" mode: on the display under the pointer, which the bar then moves to (even while still
+    // visible on another display).
+    let follow = follows_pointer();
+    let mon = if follow { pointer_mon_rect(p).unwrap_or(g.mon) } else { g.mon };
+    let other_display = !rect_eq(&mon, &g.mon);
+    let edge_y = if config_top() { mon.top } else { mon.bottom - 1 };
+    let at_edge = p.y == edge_y && p.x >= mon.left && p.x < mon.right && edge_is_screen_border(&mon, p.x);
     if !at_edge {
         EDGE_SINCE.store(0, Relaxed);
         EDGE_ARMED.store(true, Relaxed); // re-arms only after leaving the edge
-    } else if !VISIBLE.load(Relaxed) && EDGE_ARMED.load(Relaxed) {
+    } else if (!VISIBLE.load(Relaxed) || other_display) && EDGE_ARMED.load(Relaxed) {
         let since = EDGE_SINCE.load(Relaxed);
         if since == 0 {
             EDGE_SINCE.store(now, Relaxed);
@@ -3267,7 +3286,10 @@ fn on_poll() {
             EDGE_SINCE.store(0, Relaxed);
             EDGE_ARMED.store(false, Relaxed);
             // On fullscreen / borderless apps the edge does NOT open the dock: only the Win key.
-            if fullscreen_window(&g.mon).is_none() {
+            if fullscreen_window(&mon).is_none() {
+                if other_display {
+                    follow_pointer();
+                }
                 show_dock("screen edge", SHOW_MS);
             }
         }
