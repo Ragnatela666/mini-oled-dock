@@ -196,6 +196,6 @@ To render the screenshots, build with `DOCK_NO_MANIFEST=1` (a non-elevated manif
 
 A few Windows shell protocol structures in `src/tray_host.rs` are adapted from [lightbar](https://github.com/SauerExe/lightbar) (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Other shell projects were studied for protocol knowledge only; no AGPL code was copied.
 
-The Start button, quick-links menu and window previews are by Desox (PRs #1 and #2 upstream).
+Huge thanks to [Desox](https://github.com/Desox96) for the excellent work on this project: the Start button, quick-links menu and window previews (PRs #1 and #2 upstream), and in this fork the tray menu placement and foreground fixes, Win opening Start, the IT/EN language switch, spatial audio and the per-app mixer, the customizable volume popup and the horizontal Start layout ([PR #1](https://github.com/Ragnatela666/mini-oled-dock/pull/1)). Clean, well-split, carefully tested contributions.
 
 [MIT](LICENSE) &copy; 2026 gitgiovik
