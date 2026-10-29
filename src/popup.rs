@@ -1418,6 +1418,32 @@ pub(crate) fn center_y(rc: &RECT, lh: i32) -> i32 {
     rc.top + ((rc.bottom - rc.top) - lh) / 2
 }
 
+/// Track thickness of the slider shared by the popups (logical px).
+const SLIDER_TRACK_H: i32 = 4;
+
+/// Value in `lo..=hi` (rounded to the nearest step) for pointer x on slider `rc`. The center of
+/// the knob (radius `knob_r`) travels between `rc.left + knob_r` and `rc.right - knob_r`.
+/// Shared by the Settings and Audio popups.
+pub(crate) fn slider_value_at(rc: &RECT, knob_r: i32, lo: i32, hi: i32, x: i32) -> i32 {
+    let (l, r) = (rc.left + knob_r, rc.right - knob_r);
+    let span = (r - l).max(1);
+    lo + ((x - l).clamp(0, span) * (hi - lo) + span / 2) / span
+}
+
+/// Slider shared by the popups at value `v` in `lo..=hi`: dim rail across `rc`, bright fill up
+/// to the knob, white knob of radius `knob_r` (same travel as `slider_value_at`).
+pub(crate) fn paint_slider(s: &mut Surface, rc: &RECT, knob_r: i32, lo: i32, hi: i32, v: i32) {
+    use crate::surface::WHITE;
+    let (tl, tr) = (rc.left + knob_r, rc.right - knob_r);
+    let cy = (rc.top + rc.bottom) / 2;
+    let th = s.metrics().px(SLIDER_TRACK_H);
+    let rail = RECT { left: rc.left, top: cy - th / 2, right: rc.right, bottom: cy - th / 2 + th };
+    s.fill_rr(rail, th / 2, WHITE, 60);
+    let kx = tl + (tr - tl) * (v - lo) / (hi - lo).max(1);
+    s.fill_rr(RECT { right: kx, ..rail }, th / 2, WHITE, 230);
+    s.fill_rr(RECT { left: kx - knob_r, top: cy - knob_r, right: kx + knob_r, bottom: cy + knob_r }, knob_r, WHITE, 255);
+}
+
 /// Opens `target` (e.g. `ms-settings:...`) on the shell thread.
 pub(crate) fn launch(target: &str) {
     crate::shell_thread::request(crate::shell_thread::ShellRequest::Launch { target: target.to_string(), args: None });
