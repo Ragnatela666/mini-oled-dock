@@ -1243,16 +1243,17 @@ fn start_icon(id: &str, px: u32) -> Option<IconBitmap> {
     nonempty(icons::resize_area(&b?, px))
 }
 
-/// Version-resource strings of an executable, read through `IShellItem2::GetString`.
+/// Version-resource strings of an executable, read through `IShellItem2::GetString`. Also used by
+/// `tray_host` for the tray icons' app names. Needs COM initialized on the calling thread.
 #[derive(Default)]
-struct FileInfo {
-    description: Option<String>,
+pub(crate) struct FileInfo {
+    pub(crate) description: Option<String>,
     product: Option<String>,
     company: Option<String>,
 }
 
 impl FileInfo {
-    fn read(exe_path: &str) -> FileInfo {
+    pub(crate) fn read(exe_path: &str) -> FileInfo {
         let path = HSTRING::from(exe_path);
         // SAFETY: COM STA initialized; `path` lives for the call.
         let Ok(item) = (unsafe { SHCreateItemFromParsingName::<_, _, IShellItem2>(&path, None::<&IBindCtx>) }) else {
@@ -1606,33 +1607,8 @@ fn toggle_desktop() {
     let r = sd.and_then(|sd| unsafe { sd.ToggleDesktop() });
     if let Err(e) = r {
         log!("shell: ToggleDesktop COM failed: {e}, using Win+D");
-        send_win_d();
-    }
-}
-
-/// Win+D with `dwExtraInfo = INJECT_TAG` (the keyboard hook lets it through).
-fn send_win_d() {
-    let key = |vk: VIRTUAL_KEY, up: bool, ext: bool| {
-        let mut flags = KEYBD_EVENT_FLAGS(0);
-        if up {
-            flags |= KEYEVENTF_KEYUP;
-        }
-        if ext {
-            flags |= KEYEVENTF_EXTENDEDKEY;
-        }
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: crate::hook::INJECT_TAG },
-            },
-        }
-    };
-    let d = VIRTUAL_KEY(0x44);
-    let inputs = [key(VK_LWIN, false, true), key(d, false, false), key(d, true, false), key(VK_LWIN, true, true)];
-    // SAFETY: `inputs` is a valid array of INPUT with the declared size.
-    let n = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if n as usize != inputs.len() {
-        log!("shell: SendInput Win+D: sent {n}/{}", inputs.len());
+        // Plain SendInput (no UI-thread state): safe to call from the shell thread.
+        crate::ui::send_win_key(VIRTUAL_KEY(0x44));
     }
 }
 

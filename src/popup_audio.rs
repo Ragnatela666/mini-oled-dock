@@ -32,7 +32,9 @@ use crate::audio::{self, AppSession, OutputDevice, SpatialState, VolumeState, WH
 use crate::config::{self, AudioLayout, AUDIO_MASTER, AUDIO_MIXER, AUDIO_OUTPUT, AUDIO_SPATIAL};
 use crate::glyphs;
 use crate::i18n::tr;
-use crate::popup::{center_y, hline, launch, lift, row_plate, tick_ms, Content, DataEvent, HitMap, PopupKind, Reply};
+use crate::popup::{
+    center_y, hline, launch, lift, paint_slider, row_plate, slider_value_at, tick_ms, Content, DataEvent, HitMap, PopupKind, Reply,
+};
 use crate::shell_thread::{self, ShellRequest};
 use crate::surface::{rect_wh, Font, Surface, PANEL_PAD, TEXT2_ALPHA, TEXT3_ALPHA, TEXT_ALPHA, TEXT_COL, WHITE};
 
@@ -200,29 +202,14 @@ pub(crate) fn new(volume: VolumeState) -> Box<dyn Content> {
 
 // ------------------------------------------------------------------ shared slider / speaker helpers
 
-/// Extremes (physical px) along which the center of the knob of slider `rc` moves.
-fn track(rc: &RECT, knob_r: i32) -> (i32, i32) {
-    (rc.left + knob_r, rc.right - knob_r)
-}
-
-/// Level 0..=100 for pointer x on slider `rc`.
+/// Level 0..=100 for pointer x on slider `rc` (`popup::slider_value_at`).
 fn level_at(rc: &RECT, knob_r: i32, x: i32) -> u8 {
-    let (l, r) = track(rc, knob_r);
-    let span = (r - l).max(1);
-    (((x - l) * 100 + span / 2) / span).clamp(0, 100) as u8
+    slider_value_at(rc, knob_r, 0, 100, x) as u8
 }
 
-/// Track, filled part and knob of slider `rc` at `level`.
-fn paint_slider(s: &mut Surface, rc: &RECT, knob_r: i32, level: u8) {
-    let m = s.metrics();
-    let (tl, tr) = track(rc, knob_r);
-    let cy = (rc.top + rc.bottom) / 2;
-    let th = m.px(4);
-    let top = cy - th / 2;
-    s.fill_rr(RECT { left: rc.left, top, right: rc.right, bottom: top + th }, th / 2, WHITE, 60);
-    let kx = tl + (tr - tl) * level.min(100) as i32 / 100;
-    s.fill_rr(RECT { left: rc.left, top, right: kx, bottom: top + th }, th / 2, WHITE, 230);
-    s.fill_rr(RECT { left: kx - knob_r, top: cy - knob_r, right: kx + knob_r, bottom: cy + knob_r }, knob_r, WHITE, 255);
+/// Track, filled part and knob of slider `rc` at `level` (`popup::paint_slider`).
+fn paint_level(s: &mut Surface, rc: &RECT, knob_r: i32, level: u8) {
+    paint_slider(s, rc, knob_r, 0, 100, i32::from(level.min(100)));
 }
 
 /// Speaker button (plate + glyph) for mute toggle `id` in `rc`.
@@ -553,7 +540,7 @@ impl AudioPopup {
     fn paint_master(&self, s: &mut Surface, hot: Option<u32>, pressed: Option<u32>) {
         let Some(rc) = self.hits.rect(ID_MUTE) else { return };
         paint_speaker(s, rc, ID_MUTE, hot, pressed, self.level, self.muted || !self.available);
-        paint_slider(s, &self.slider, self.knob_r, self.level);
+        paint_level(s, &self.slider, self.knob_r, self.level);
         paint_pct(s, self.level, self.pct_right, &rc, TEXT2_ALPHA);
     }
 
@@ -639,7 +626,7 @@ impl AudioPopup {
             let name = s.ellipsize(&a.name, Font::Normal, self.app_name_w);
             let alpha = if a.muted { TEXT3_ALPHA } else { TEXT2_ALPHA };
             s.text(&name, self.app_name_x, center_y(&brc, lh), Font::Normal, WHITE, alpha);
-            paint_slider(s, &src, self.knob_r, a.level);
+            paint_level(s, &src, self.knob_r, a.level);
             paint_pct(s, a.level, self.pct_right, &brc, TEXT2_ALPHA);
         }
     }
@@ -1023,7 +1010,6 @@ mod tests {
     #[test]
     fn slider_levels() {
         let r = rc(100, 214); // track 107..207
-        assert_eq!(track(&r, 7), (107, 207));
         assert_eq!(level_at(&r, 7, 0), 0);
         assert_eq!(level_at(&r, 7, 107), 0);
         assert_eq!(level_at(&r, 7, 157), 50);

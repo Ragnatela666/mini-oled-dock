@@ -20,8 +20,8 @@
 //!  Plus the watchdog PROCESS (`dock.exe --watchdog <pid> <event>`).
 //!
 //! STARTUP ORDER (`run`): config -> watchdog::spawn (before touching the taskbar) -> taskbar::init
-//! -> ui::init (geometry) -> window -> ui::attach -> popup::init -> shell thread -> notif ->
-//! tray host (+ taskbar::announce_tray) -> apps and taskbar WinEvent hooks -> stop-watch ->
+//! -> ui::init (geometry) -> window -> ui::attach (+ apps WinEvent hook) -> popup::init -> shell thread -> notif ->
+//! tray host (+ taskbar::announce_tray) -> taskbar WinEvent hook -> stop-watch ->
 //! Ctrl+C/hotkey/timers -> keyboard hook -> message loop. Cleanup runs in reverse order, with the tray host
 //! stopped and the taskbar restored first (host destroyed BEFORE the TaskbarCreated broadcast).
 
@@ -792,10 +792,7 @@ fn setup_and_loop(h: HWND) -> Result<(), String> {
         }
     }
 
-    // WinEventHook (UI thread): window list and taskbar control.
-    if let Err(e) = apps::install_winevent_hook() {
-        log!("apps WinEventHook not installed: {e}");
-    }
+    // WinEventHook (UI thread): taskbar control (the apps one is installed by `ui::attach`).
     if let Err(e) = taskbar::install_hook() {
         log!("taskbar WinEventHook not installed: {e}");
     }

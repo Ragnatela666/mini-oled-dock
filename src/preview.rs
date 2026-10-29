@@ -609,7 +609,7 @@ fn make_popup(name: &str, m: Metrics) -> Option<Box<dyn Content>> {
             windows: 2,
             can_launch: true,
         }),
-        "popup_start" => crate::popup::popup_start::preview_new(),
+        "popup_start" => crate::popup::popup_start::new(),
         "popup_settings_startmenu" => crate::popup_settings::preview_new(Page::StartMenu, false),
         "popup_startmenu"
         | "popup_startmenu_search"

@@ -65,8 +65,7 @@ const SEG_RIM_ALPHA: u32 = 40;
 const SEG_HOT_ALPHA: u32 = 26;
 /// Outline of the swatches and of the colour preview (visible on a panel of the same colour).
 const SWATCH_RIM_ALPHA: u32 = 70;
-/// Slider: track thickness and knob radius, as in the audio popup (logical px).
-const TRACK_H: i32 = 4;
+/// Slider knob radius, as in the audio popup (logical px; the track is `popup::paint_slider`'s).
 const KNOB_R: i32 = 7;
 /// Minimum interval between two live bar rebuilds while dragging (ms).
 const APPLY_THROTTLE_MS: u64 = 30;
@@ -606,10 +605,8 @@ impl SettingsPopup {
     /// Value of slider item `i` at the client abscissa `x`.
     fn slider_at(&self, i: usize, sl: Slider, x: i32) -> Option<i32> {
         let rc = self.hits.rect(item_id(i, Some(0)))?;
-        let (l, r) = (rc.left + self.knob_r, rc.right - self.knob_r);
         let (lo, hi, _, _) = slider_range(sl);
-        let span = (r - l).max(1);
-        Some(lo + ((x - l).clamp(0, span) * (hi - lo) + span / 2) / span)
+        Some(popup::slider_value_at(&rc, self.knob_r, lo, hi, x))
     }
 
     /// Sets the colour from the picker state (`hsv`), in memory while dragging.
@@ -633,16 +630,8 @@ impl SettingsPopup {
         let val = format!("{v}{unit}");
         let vw = s.text_width(&val, Font::Normal);
         s.text(&val, self.width - col - vw, y + m.px(6), Font::Normal, WHITE, lift(TEXT2_ALPHA, hot));
-        // Track as in the audio popup: dim rail, bright fill up to the knob, white knob.
-        let r = self.knob_r;
-        let (tl, tr) = (rc.left + r, rc.right - r);
-        let cy = (rc.top + rc.bottom) / 2;
-        let th = m.px(TRACK_H);
-        let rail = RECT { left: rc.left, top: cy - th / 2, right: rc.right, bottom: cy - th / 2 + th };
-        s.fill_rr(rail, th / 2, WHITE, 60);
-        let kx = tl + (tr - tl) * (v - lo) / (hi - lo).max(1);
-        s.fill_rr(RECT { right: kx, ..rail }, th / 2, WHITE, 230);
-        s.fill_rr(RECT { left: kx - r, top: cy - r, right: kx + r, bottom: cy + r }, r, WHITE, 255);
+        // Same slider as the audio popup.
+        popup::paint_slider(s, &rc, self.knob_r, lo, hi, v);
     }
 
     fn paint_swatches(&self, s: &mut Surface, i: usize, hot: Option<u32>) {

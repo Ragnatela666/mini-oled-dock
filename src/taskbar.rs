@@ -229,6 +229,12 @@ fn appbar(msg: u32, hwnd: HWND, lparam: u32) -> usize {
         return v;
     }
     log!("taskbar: direct AppBar {msg} send failed, falling back to SHAppBarMessage");
+    appbar_shell(msg, hwnd, lparam)
+}
+
+/// AppBar message through `SHAppBarMessage` (tray host -> Explorer): the fallback of `appbar()`
+/// and `set_state()` when the direct send fails. Returns the raw value.
+fn appbar_shell(msg: u32, hwnd: HWND, lparam: u32) -> usize {
     let mut d = APPBARDATA {
         cbSize: std::mem::size_of::<APPBARDATA>() as u32,
         hWnd: hwnd,
@@ -252,14 +258,7 @@ fn set_state(tray: HWND, state: u32) -> bool {
         return true;
     }
     log!("taskbar: direct ABM_SETSTATE send failed, falling back to SHAppBarMessage");
-    let mut d = APPBARDATA {
-        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
-        hWnd: tray,
-        lParam: LPARAM(state as isize),
-        ..Default::default()
-    };
-    // SAFETY: `d` is initialized with the correct `cbSize` and stays valid for the whole call.
-    unsafe { SHAppBarMessage(ABM_SETSTATE, &mut d) };
+    appbar_shell(ABM_SETSTATE, tray, state);
     matches!(appbar_direct(ABM_GETSTATE, tray, 0), Some(v) if (v as u32) & ABS_MASK == state)
 }
 
@@ -737,14 +736,7 @@ pub fn restore_force() {
             }
         }
     }
-    let msg = ensure_taskbar_created_msg();
-    if msg != 0 {
-        LAST_BROADCAST_MS.store(now_ms(), Relaxed);
-        // SAFETY: non-blocking broadcast (SendNotifyMessage); no pointers in the parameters.
-        if let Err(e) = unsafe { SendNotifyMessageW(HWND_BROADCAST, msg, WPARAM(0), LPARAM(0)) } {
-            log!("taskbar: TaskbarCreated broadcast failed: {e}");
-        }
-    }
+    broadcast_taskbar_created();
     log!("taskbar: restored (state {state})");
 }
 
@@ -779,17 +771,25 @@ pub fn is_dock_tray_host(h: HWND) -> bool {
 /// host) and our `on_taskbar_created` ignores the broadcast. Called by `main` after a successful
 /// `tray_host::start` and by `on_reannounce_timer`.
 pub fn announce_tray() {
+    if broadcast_taskbar_created() {
+        log!("taskbar: tray announced (TaskbarCreated)");
+    }
+}
+
+/// `LAST_BROADCAST_MS = now` + non-blocking `SendNotifyMessageW(HWND_BROADCAST, TaskbarCreated)`,
+/// shared by `restore_force` and `announce_tray`. true if the broadcast was sent; failures are logged.
+fn broadcast_taskbar_created() -> bool {
     let msg = ensure_taskbar_created_msg();
     if msg == 0 {
-        return;
+        return false;
     }
     LAST_BROADCAST_MS.store(now_ms(), Relaxed);
     // SAFETY: non-blocking broadcast (SendNotifyMessage); no pointers in the parameters.
     if let Err(e) = unsafe { SendNotifyMessageW(HWND_BROADCAST, msg, WPARAM(0), LPARAM(0)) } {
-        log!("taskbar: TaskbarCreated broadcast (tray announcement) failed: {e}");
-    } else {
-        log!("taskbar: tray announced (TaskbarCreated)");
+        log!("taskbar: TaskbarCreated broadcast failed: {e}");
+        return false;
     }
+    true
 }
 
 /// `TIMER_TRAY_REANNOUNCE` (one-shot, already killed by `main`): second announcement after an Explorer
